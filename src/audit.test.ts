@@ -25,6 +25,72 @@ const INACCESSIBLE_HTML = `
 </body>
 </html>`;
 
+const IFRAME_INACCESSIBLE_HTML = `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Iframe Test</title></head>
+<body>
+  <main>
+    <h1>Page with Iframe</h1>
+    <iframe id="child" srcdoc="<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><title>Child</title></head><body><img src='test.png'></body></html>"></iframe>
+  </main>
+</body>
+</html>`;
+
+const SHADOW_DOM_INACCESSIBLE_HTML = `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Shadow DOM Test</title></head>
+<body>
+  <main>
+    <h1>Page with Shadow DOM</h1>
+    <div id="host"></div>
+  </main>
+  <script>
+    const host = document.getElementById('host');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<img src="test.png">';
+  </script>
+</body>
+</html>`;
+
+const SHADOW_DOM_ACCESSIBLE_HTML = `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Accessible Shadow DOM</title></head>
+<body>
+  <main>
+    <h1>Page with Accessible Shadow DOM</h1>
+    <div id="host"></div>
+  </main>
+  <script>
+    const host = document.getElementById('host');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<p>Accessible content</p>';
+  </script>
+</body>
+</html>`;
+
+const NESTED_SHADOW_HTML = `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Nested Shadow Test</title></head>
+<body>
+  <main>
+    <h1>Page with Nested Shadow DOM</h1>
+    <div id="outer-host"></div>
+  </main>
+  <script>
+    const outerHost = document.getElementById('outer-host');
+    const outerShadow = outerHost.attachShadow({ mode: 'open' });
+    outerShadow.innerHTML = '<div id="inner-host"></div>';
+    const innerHost = outerShadow.querySelector('#inner-host');
+    const innerShadow = innerHost.attachShadow({ mode: 'open' });
+    innerShadow.innerHTML = '<img src="test.png">';
+  </script>
+</body>
+</html>`;
+
 const SCOPED_HTML = `
 <!DOCTYPE html>
 <html lang="en">
@@ -104,6 +170,73 @@ test.describe("accesslintAudit", () => {
   });
 });
 
+test.describe("iframe auditing", () => {
+  test("finds violations inside srcdoc iframe", async ({ page }) => {
+    await page.setContent(IFRAME_INACCESSIBLE_HTML);
+    const result = await accesslintAudit(page);
+    const ruleIds = result.violations.map((v) => v.ruleId);
+    expect(ruleIds).toContain("accesslint-011");
+  });
+
+  test("violation selectors include >>>iframe> prefix", async ({ page }) => {
+    await page.setContent(IFRAME_INACCESSIBLE_HTML);
+    const result = await accesslintAudit(page);
+    const iframeViolations = result.violations.filter((v) =>
+      v.selector.includes(">>>iframe>"),
+    );
+    expect(iframeViolations.length).toBeGreaterThan(0);
+  });
+
+  test("includeFrames: false skips iframe violations", async ({ page }) => {
+    await page.setContent(IFRAME_INACCESSIBLE_HTML);
+    const result = await accesslintAudit(page, { includeFrames: false });
+    const iframeViolations = result.violations.filter((v) =>
+      v.selector.includes(">>>iframe>"),
+    );
+    expect(iframeViolations).toHaveLength(0);
+  });
+});
+
+test.describe("shadow DOM auditing", () => {
+  test("finds violations inside open shadow root", async ({ page }) => {
+    await page.setContent(SHADOW_DOM_INACCESSIBLE_HTML);
+    const result = await accesslintAudit(page);
+    const ruleIds = result.violations.map((v) => v.ruleId);
+    expect(ruleIds).toContain("accesslint-011");
+  });
+
+  test("violation selectors include >>> delimiter", async ({ page }) => {
+    await page.setContent(SHADOW_DOM_INACCESSIBLE_HTML);
+    const result = await accesslintAudit(page);
+    const shadowViolations = result.violations.filter(
+      (v) => v.selector.includes(">>>") && !v.selector.includes(">>>iframe>"),
+    );
+    expect(shadowViolations.length).toBeGreaterThan(0);
+  });
+
+  test("nested shadow roots work", async ({ page }) => {
+    await page.setContent(NESTED_SHADOW_HTML);
+    const result = await accesslintAudit(page);
+    const ruleIds = result.violations.map((v) => v.ruleId);
+    expect(ruleIds).toContain("accesslint-011");
+  });
+
+  test("includeShadowDom: false skips shadow DOM violations", async ({ page }) => {
+    await page.setContent(SHADOW_DOM_INACCESSIBLE_HTML);
+    const result = await accesslintAudit(page, { includeShadowDom: false });
+    const shadowViolations = result.violations.filter(
+      (v) => v.selector.includes(">>>") && !v.selector.includes(">>>iframe>"),
+    );
+    expect(shadowViolations).toHaveLength(0);
+  });
+
+  test("accessible shadow content has no violations", async ({ page }) => {
+    await page.setContent(SHADOW_DOM_ACCESSIBLE_HTML);
+    const result = await accesslintAudit(page);
+    expect(result.violations).toHaveLength(0);
+  });
+});
+
 test.describe("toBeAccessible matcher", () => {
   test("passes for accessible page", async ({ page }) => {
     await page.setContent(ACCESSIBLE_HTML);
@@ -127,5 +260,15 @@ test.describe("toBeAccessible matcher", () => {
     await expect(page).toBeAccessible({
       disabledRules: ["accesslint-011", "accesslint-080"],
     });
+  });
+
+  test("fails when iframe content is inaccessible", async ({ page }) => {
+    await page.setContent(IFRAME_INACCESSIBLE_HTML);
+    await expect(page).not.toBeAccessible();
+  });
+
+  test("fails when shadow DOM content is inaccessible", async ({ page }) => {
+    await page.setContent(SHADOW_DOM_INACCESSIBLE_HTML);
+    await expect(page).not.toBeAccessible();
   });
 });

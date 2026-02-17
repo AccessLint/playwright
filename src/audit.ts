@@ -5,13 +5,15 @@
  */
 import { createRequire } from "node:module";
 import { getRuleById } from "@accesslint/core";
-import type { Page, Locator } from "@playwright/test";
+import type { Page, Locator, Frame } from "@playwright/test";
 
 const require = createRequire(import.meta.url);
 const iifePath = require.resolve("@accesslint/core/iife");
 
 export interface AccessibleMatcherOptions {
   disabledRules?: string[];
+  includeFrames?: boolean;
+  includeShadowDom?: boolean;
 }
 
 export interface AuditViolation {
@@ -38,11 +40,115 @@ function getPage(target: Page | Locator): Page {
   return target.page();
 }
 
-async function ensureInjected(page: Page): Promise<void> {
-  const hasAccessLint = await page.evaluate(() => typeof (window as any).AccessLint !== "undefined");
+async function ensureInjected(target: Page | Frame): Promise<void> {
+  const hasAccessLint = await target.evaluate(() => typeof (window as any).AccessLint !== "undefined");
   if (!hasAccessLint) {
-    await page.addScriptTag({ path: iifePath });
+    await target.addScriptTag({ path: iifePath });
   }
+}
+
+async function auditShadowDom(page: Page): Promise<AuditViolation[]> {
+  return page.evaluate(() => {
+    const { getActiveRules, clearAllCaches } = (window as any).AccessLint;
+
+    function findShadowRoots(root: Node): ShadowRoot[] {
+      const roots: ShadowRoot[] = [];
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+      let node: Node | null = walker.nextNode();
+      while (node) {
+        if ((node as Element).shadowRoot) {
+          roots.push((node as Element).shadowRoot!);
+          roots.push(...findShadowRoots((node as Element).shadowRoot!));
+        }
+        node = walker.nextNode();
+      }
+      return roots;
+    }
+
+    const shadowRoots = findShadowRoots(document);
+    const violations: any[] = [];
+
+    for (const shadowRoot of shadowRoots) {
+      clearAllCaches();
+      const rules = getActiveRules();
+      for (const rule of rules) {
+        try {
+          const ruleViolations = rule.run(shadowRoot);
+          violations.push(...ruleViolations);
+        } catch {
+          // Skip rules that don't work on shadow roots (e.g., html-has-lang)
+        }
+      }
+    }
+
+    // Filter to violations actually inside a shadow root (selector contains >>>).
+    // Document-level rules may leak through without throwing; their selectors
+    // (e.g. "html") won't have the shadow boundary delimiter.
+    return violations
+      .filter((v: any) => v.selector.includes(">>>"))
+      .map((v: any) => ({
+        ruleId: v.ruleId,
+        selector: v.selector,
+        html: v.html,
+        impact: v.impact,
+        message: v.message,
+      }));
+  });
+}
+
+async function getFrameSelectorPrefix(frame: Frame): Promise<string> {
+  const parts: string[] = [];
+  let current: Frame | null = frame;
+
+  while (current && current.parentFrame()) {
+    const parent = current.parentFrame()!;
+    await ensureInjected(parent);
+    const frameElementHandle = await current.frameElement();
+    const selector = await parent.evaluate(
+      (el) => (window as any).AccessLint.getSelector(el),
+      frameElementHandle,
+    );
+    parts.unshift(selector + " >>>iframe>");
+    current = parent;
+  }
+
+  return parts.join(" ");
+}
+
+async function auditFrames(page: Page): Promise<AuditViolation[]> {
+  const violations: AuditViolation[] = [];
+  const mainFrame = page.mainFrame();
+
+  for (const frame of page.frames()) {
+    if (frame === mainFrame) continue;
+    if (frame.url() === "about:blank") continue;
+
+    try {
+      await ensureInjected(frame);
+      const prefix = await getFrameSelectorPrefix(frame);
+
+      const frameViolations: AuditViolation[] = await frame.evaluate(() => {
+        const { runAudit } = (window as any).AccessLint;
+        const raw = runAudit(document);
+        return raw.violations.map((v: any) => ({
+          ruleId: v.ruleId,
+          selector: v.selector,
+          html: v.html,
+          impact: v.impact,
+          message: v.message,
+        }));
+      });
+
+      for (const v of frameViolations) {
+        v.selector = prefix + " " + v.selector;
+        violations.push(v);
+      }
+    } catch {
+      // Skip cross-origin or detached frames
+    }
+  }
+
+  return violations;
 }
 
 export async function accesslintAudit(
@@ -71,6 +177,16 @@ export async function accesslintAudit(
         })),
       };
     });
+
+    if (options?.includeShadowDom !== false) {
+      const shadowViolations = await auditShadowDom(page);
+      result.violations.push(...shadowViolations);
+    }
+
+    if (options?.includeFrames !== false) {
+      const frameViolations = await auditFrames(page);
+      result.violations.push(...frameViolations);
+    }
   } else {
     result = await target.evaluate((el) => {
       const { runAudit } = (window as any).AccessLint;
