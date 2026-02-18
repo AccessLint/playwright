@@ -7,18 +7,20 @@
  */
 import { expect } from "@playwright/test";
 import { accesslintMatchers } from "./matchers";
-import type { AccessibleMatcherOptions } from "./audit";
+import type { SnapshotMatcherOptions } from "./matchers";
 
 expect.extend(accesslintMatchers);
 
 export { accesslintAudit, formatViolation } from "./audit";
 export type { AccessibleMatcherOptions, AuditResult, AuditViolation } from "./audit";
 export { accesslintMatchers, toBeAccessible } from "./matchers";
+export type { SnapshotMatcherOptions } from "./matchers";
+export type { SnapshotViolation } from "./snapshot";
 
 declare global {
   namespace PlaywrightTest {
     interface Matchers<R, T> {
-      toBeAccessible(options?: AccessibleMatcherOptions): Promise<R>;
+      toBeAccessible(options?: SnapshotMatcherOptions): Promise<R>;
     }
   }
 }
