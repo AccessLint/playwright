@@ -1,6 +1,6 @@
 {
   "name": "@accesslint/playwright",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Accessibility assertions for Playwright — toBeAccessible() matcher powered by AccessLint",
   "license": "MIT",
   "publishConfig": {

@@ -91,13 +91,45 @@ export function compareViolations(
   current: SnapshotViolation[],
   baseline: SnapshotViolation[],
 ): { newViolations: SnapshotViolation[]; fixedViolations: SnapshotViolation[] } {
-  const baselineSet = new Set(baseline.map(violationKey));
-  const currentSet = new Set(current.map(violationKey));
+  // Count-based comparison to handle duplicate ruleId+selector pairs
+  // (e.g. multiple <img> elements that all resolve to getByRole('img'))
+  const baselineCounts = new Map<string, number>();
+  for (const v of baseline) {
+    const key = violationKey(v);
+    baselineCounts.set(key, (baselineCounts.get(key) ?? 0) + 1);
+  }
 
-  return {
-    newViolations: current.filter((v) => !baselineSet.has(violationKey(v))),
-    fixedViolations: baseline.filter((v) => !currentSet.has(violationKey(v))),
-  };
+  const remaining = new Map(baselineCounts);
+  const newViolations: SnapshotViolation[] = [];
+  for (const v of current) {
+    const key = violationKey(v);
+    const count = remaining.get(key) ?? 0;
+    if (count > 0) {
+      remaining.set(key, count - 1);
+    } else {
+      newViolations.push(v);
+    }
+  }
+
+  const currentCounts = new Map<string, number>();
+  for (const v of current) {
+    const key = violationKey(v);
+    currentCounts.set(key, (currentCounts.get(key) ?? 0) + 1);
+  }
+
+  const remainingCurrent = new Map(currentCounts);
+  const fixedViolations: SnapshotViolation[] = [];
+  for (const v of baseline) {
+    const key = violationKey(v);
+    const count = remainingCurrent.get(key) ?? 0;
+    if (count > 0) {
+      remainingCurrent.set(key, count - 1);
+    } else {
+      fixedViolations.push(v);
+    }
+  }
+
+  return { newViolations, fixedViolations };
 }
 
 // ---------------------------------------------------------------------------

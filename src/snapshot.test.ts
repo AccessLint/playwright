@@ -201,6 +201,51 @@ test.describe("compareViolations", () => {
     expect(newViolations).toHaveLength(1);
     expect(fixedViolations).toHaveLength(1);
   });
+
+  test("handles duplicate selectors — added", () => {
+    const sel = "getByRole('img')";
+    const baseline: SnapshotViolation[] = [
+      { ruleId: "accesslint-011", selector: sel },
+      { ruleId: "accesslint-011", selector: sel },
+    ];
+    const current: SnapshotViolation[] = [
+      { ruleId: "accesslint-011", selector: sel },
+      { ruleId: "accesslint-011", selector: sel },
+      { ruleId: "accesslint-011", selector: sel },
+    ];
+
+    const { newViolations, fixedViolations } = compareViolations(current, baseline);
+    expect(newViolations).toHaveLength(1);
+    expect(fixedViolations).toHaveLength(0);
+  });
+
+  test("handles duplicate selectors — removed", () => {
+    const sel = "getByRole('img')";
+    const baseline: SnapshotViolation[] = [
+      { ruleId: "accesslint-011", selector: sel },
+      { ruleId: "accesslint-011", selector: sel },
+      { ruleId: "accesslint-011", selector: sel },
+    ];
+    const current: SnapshotViolation[] = [
+      { ruleId: "accesslint-011", selector: sel },
+    ];
+
+    const { newViolations, fixedViolations } = compareViolations(current, baseline);
+    expect(newViolations).toHaveLength(0);
+    expect(fixedViolations).toHaveLength(2);
+  });
+
+  test("handles duplicate selectors — unchanged count", () => {
+    const sel = "getByRole('img')";
+    const violations: SnapshotViolation[] = [
+      { ruleId: "accesslint-011", selector: sel },
+      { ruleId: "accesslint-011", selector: sel },
+    ];
+
+    const { newViolations, fixedViolations } = compareViolations(violations, violations);
+    expect(newViolations).toHaveLength(0);
+    expect(fixedViolations).toHaveLength(0);
+  });
 });
 
 test.describe("evaluateSnapshot", () => {
