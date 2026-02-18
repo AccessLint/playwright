@@ -37,6 +37,18 @@ const IFRAME_INACCESSIBLE_HTML = `
 </body>
 </html>`;
 
+const IFRAME_SHADOW_DOM_HTML = `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Iframe Shadow DOM Test</title></head>
+<body>
+  <main>
+    <h1>Page with Iframe containing Shadow DOM</h1>
+    <iframe id="child" srcdoc="<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><title>Child</title></head><body><div id='host'></div><script>document.getElementById('host').attachShadow({mode:'open'}).innerHTML='<img src=test.png>';</script></body></html>"></iframe>
+  </main>
+</body>
+</html>`;
+
 const SHADOW_DOM_INACCESSIBLE_HTML = `
 <!DOCTYPE html>
 <html lang="en">
@@ -185,6 +197,17 @@ test.describe("iframe auditing", () => {
       v.selector.includes(">>>iframe>"),
     );
     expect(iframeViolations.length).toBeGreaterThan(0);
+  });
+
+  test("finds shadow DOM violations inside iframe", async ({ page }) => {
+    await page.setContent(IFRAME_SHADOW_DOM_HTML);
+    const result = await accesslintAudit(page);
+    const violations = result.violations.filter(
+      (v) => v.selector.includes(">>>iframe>") && v.selector.includes(">>>"),
+    );
+    expect(violations.length).toBeGreaterThan(0);
+    const ruleIds = violations.map((v) => v.ruleId);
+    expect(ruleIds).toContain("accesslint-011");
   });
 
   test("includeFrames: false skips iframe violations", async ({ page }) => {

@@ -47,8 +47,8 @@ async function ensureInjected(target: Page | Frame): Promise<void> {
   }
 }
 
-async function auditShadowDom(page: Page): Promise<AuditViolation[]> {
-  return page.evaluate(() => {
+async function auditShadowDom(target: Page | Frame): Promise<AuditViolation[]> {
+  return target.evaluate(() => {
     const { getActiveRules, clearAllCaches } = (window as any).AccessLint;
 
     function findShadowRoots(root: Node): ShadowRoot[] {
@@ -115,7 +115,7 @@ async function getFrameSelectorPrefix(frame: Frame): Promise<string> {
   return parts.join(" ");
 }
 
-async function auditFrames(page: Page): Promise<AuditViolation[]> {
+async function auditFrames(page: Page, includeShadowDom: boolean): Promise<AuditViolation[]> {
   const violations: AuditViolation[] = [];
   const mainFrame = page.mainFrame();
 
@@ -143,8 +143,16 @@ async function auditFrames(page: Page): Promise<AuditViolation[]> {
         v.selector = prefix + " " + v.selector;
         violations.push(v);
       }
+
+      if (includeShadowDom) {
+        const shadowViolations = await auditShadowDom(frame);
+        for (const v of shadowViolations) {
+          v.selector = prefix + " " + v.selector;
+          violations.push(v);
+        }
+      }
     } catch {
-      // Skip cross-origin or detached frames
+      // Skip detached frames
     }
   }
 
@@ -184,7 +192,7 @@ export async function accesslintAudit(
     }
 
     if (options?.includeFrames !== false) {
-      const frameViolations = await auditFrames(page);
+      const frameViolations = await auditFrames(page, options?.includeShadowDom !== false);
       result.violations.push(...frameViolations);
     }
   } else {
