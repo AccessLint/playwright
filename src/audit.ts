@@ -101,7 +101,7 @@ async function getFrameSelectorPrefix(frame: Frame): Promise<string> {
   let current: Frame | null = frame;
 
   while (current && current.parentFrame()) {
-    const parent = current.parentFrame()!;
+    const parent: Frame = current.parentFrame()!;
     await ensureInjected(parent);
     const frameElementHandle = await current.frameElement();
     const selector = await parent.evaluate(
