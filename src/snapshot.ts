@@ -9,7 +9,7 @@
 import { createRequire } from "node:module";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type { Page, Locator } from "@playwright/test";
+import type { Page, Locator, Frame } from "@playwright/test";
 import type { AuditViolation } from "./audit";
 
 const require = createRequire(import.meta.url);
@@ -278,16 +278,16 @@ function loadAsLocator(): (lang: string, selector: string) => string {
 let _injectedSource: string | undefined;
 let _asLocator: ((lang: string, selector: string) => string) | undefined;
 
-/** Inject Playwright's InjectedScript into the page (once per page). */
-async function ensureInjectedScript(page: Page): Promise<void> {
-  const done = await page.evaluate(
+/** Inject Playwright's InjectedScript (once per context). Works with both Page and Frame. */
+async function ensureInjectedScript(target: Page | Frame): Promise<void> {
+  const done = await target.evaluate(
     () => typeof (window as any).__accesslintInjected !== "undefined",
   );
   if (done) return;
 
   if (!_injectedSource) _injectedSource = getInjectedScriptSource();
 
-  await page.addScriptTag({
+  await target.addScriptTag({
     content: `(() => {
       const module = {};
       ${_injectedSource}
@@ -305,41 +305,25 @@ async function ensureInjectedScript(page: Page): Promise<void> {
 }
 
 /**
- * Convert audit violations into snapshot violations with **stable selectors**.
- *
- * Uses Playwright's `InjectedScript.generateSelectorSimple()` — the same
- * engine behind codegen — to produce selectors that favor ARIA roles,
- * accessible names, text content, and test IDs over CSS classes and random
- * IDs.  The internal selector format is then converted to the human-readable
- * Locator API form via `asLocator()`.
- *
- * Example: `main > img`  →  `getByRole('img')`
- *
- * Falls back to a tag-path selector if injection fails.
+ * Generate stable selectors for CSS selectors within a Page or Frame.
+ * Injects InjectedScript, runs generateSelectorSimple, then converts
+ * via asLocator. Falls back to tag-path selectors on failure.
  */
-export async function toStableViolations(
-  target: Page | Locator,
-  violations: AuditViolation[],
-): Promise<SnapshotViolation[]> {
-  if (violations.length === 0) return [];
+async function stabilizeSelectors(
+  target: Page | Frame,
+  cssSelectors: string[],
+): Promise<string[]> {
+  if (cssSelectors.length === 0) return [];
 
-  const page = getPage(target);
-  const selectors = violations.map((v) => v.selector);
-
-  let stableSelectors: string[];
   try {
-    await ensureInjectedScript(page);
+    await ensureInjectedScript(target);
     if (!_asLocator) _asLocator = loadAsLocator();
     const asLocator = _asLocator;
 
-    const internalSelectors: string[] = await page.evaluate(
-      (cssSelectors: string[]) => {
+    const internalSelectors: string[] = await target.evaluate(
+      (selectors: string[]) => {
         const injected = (window as any).__accesslintInjected;
-
-        return cssSelectors.map((selector) => {
-          // Shadow-DOM / iframe boundary selectors — keep as-is
-          if (selector.includes(">>>")) return selector;
-
+        return selectors.map((selector) => {
           try {
             const el = selector
               ? document.querySelector(selector)
@@ -353,12 +337,10 @@ export async function toStableViolations(
           }
         });
       },
-      selectors,
+      cssSelectors,
     );
 
-    // Convert internal:role=button[name="X"i] → getByRole('button', { name: 'X' })
-    stableSelectors = internalSelectors.map((sel) => {
-      if (sel.includes(">>>")) return sel;
+    return internalSelectors.map((sel) => {
       try {
         return asLocator("javascript", sel);
       } catch {
@@ -366,21 +348,158 @@ export async function toStableViolations(
       }
     });
   } catch {
-    // Fallback: tag-path selectors if InjectedScript fails
-    stableSelectors = await tagPathFallback(page, selectors);
+    return tagPathFallback(target, cssSelectors);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Frame navigation for >>>iframe> selectors
+// ---------------------------------------------------------------------------
+
+const IFRAME_BOUNDARY = " >>>iframe> ";
+
+/**
+ * Navigate the frame tree to find the innermost frame described by a
+ * `>>>iframe>` prefix like `#iframe1 >>>iframe> #iframe2 >>>iframe>`.
+ */
+async function findFrameByPrefix(
+  page: Page,
+  prefix: string,
+): Promise<Frame | null> {
+  const segments = prefix
+    .split(" >>>iframe>")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  let currentFrame: Frame = page.mainFrame();
+  for (const iframeSelector of segments) {
+    let found = false;
+    for (const child of currentFrame.childFrames()) {
+      try {
+        const frameEl = await child.frameElement();
+        const matches = await currentFrame.evaluate(
+          ([el, sel]: [Element, string]) => {
+            try {
+              return el.matches(sel);
+            } catch {
+              return false;
+            }
+          },
+          [frameEl, iframeSelector] as [any, string],
+        );
+        if (matches) {
+          currentFrame = child;
+          found = true;
+          break;
+        }
+      } catch {
+        continue;
+      }
+    }
+    if (!found) return null;
+  }
+  return currentFrame;
+}
+
+/**
+ * Convert audit violations into snapshot violations with **stable selectors**.
+ *
+ * Uses Playwright's `InjectedScript.generateSelectorSimple()` — the same
+ * engine behind codegen — to produce selectors that favor ARIA roles,
+ * accessible names, text content, and test IDs over CSS classes and random
+ * IDs.  The internal selector format is then converted to the human-readable
+ * Locator API form via `asLocator()`.
+ *
+ * For iframe violations (`>>>iframe>`), navigates to the inner frame and
+ * stabilizes the element selector within that frame's context.
+ *
+ * Falls back to a tag-path selector if injection fails.
+ */
+export async function toStableViolations(
+  target: Page | Locator,
+  violations: AuditViolation[],
+): Promise<SnapshotViolation[]> {
+  if (violations.length === 0) return [];
+
+  const page = getPage(target);
+  const result: SnapshotViolation[] = new Array(violations.length);
+
+  // Categorize violations by context
+  const mainIndices: number[] = [];
+  const mainSelectors: string[] = [];
+  const iframeGroups = new Map<
+    string,
+    { indices: number[]; suffixes: string[] }
+  >();
+
+  for (let i = 0; i < violations.length; i++) {
+    const selector = violations[i].selector;
+    const lastIframe = selector.lastIndexOf(IFRAME_BOUNDARY);
+
+    if (lastIframe >= 0) {
+      const prefix = selector.substring(
+        0,
+        lastIframe + IFRAME_BOUNDARY.length - 1, // trim trailing space
+      );
+      const suffix = selector.substring(lastIframe + IFRAME_BOUNDARY.length);
+
+      if (suffix.includes(">>>")) {
+        // Shadow DOM within iframe — keep as-is
+        result[i] = { ruleId: violations[i].ruleId, selector };
+      } else {
+        const group = iframeGroups.get(prefix) ?? {
+          indices: [],
+          suffixes: [],
+        };
+        group.indices.push(i);
+        group.suffixes.push(suffix);
+        iframeGroups.set(prefix, group);
+      }
+    } else if (selector.includes(">>>")) {
+      // Pure shadow DOM — keep as-is
+      result[i] = { ruleId: violations[i].ruleId, selector };
+    } else {
+      mainIndices.push(i);
+      mainSelectors.push(selector);
+    }
   }
 
-  return violations.map((v, i) => ({
-    ruleId: v.ruleId,
-    selector: stableSelectors[i],
-  }));
+  // Stabilize main-frame selectors
+  const stableMain = await stabilizeSelectors(page, mainSelectors);
+  for (let i = 0; i < mainIndices.length; i++) {
+    result[mainIndices[i]] = {
+      ruleId: violations[mainIndices[i]].ruleId,
+      selector: stableMain[i],
+    };
+  }
+
+  // Stabilize iframe selectors within their frame context
+  for (const [prefix, { indices, suffixes }] of iframeGroups) {
+    let stableSuffixes: string[];
+    try {
+      const frame = await findFrameByPrefix(page, prefix);
+      stableSuffixes = frame
+        ? await stabilizeSelectors(frame, suffixes)
+        : suffixes;
+    } catch {
+      stableSuffixes = suffixes;
+    }
+    for (let i = 0; i < indices.length; i++) {
+      result[indices[i]] = {
+        ruleId: violations[indices[i]].ruleId,
+        selector: prefix + " " + stableSuffixes[i],
+      };
+    }
+  }
+
+  return result;
 }
 
 async function tagPathFallback(
-  page: Page,
+  target: Page | Frame,
   selectors: string[],
 ): Promise<string[]> {
-  return page.evaluate((cssSelectors: string[]) => {
+  return target.evaluate((cssSelectors: string[]) => {
     function tagPath(el: Element): string {
       const parts: string[] = [];
       let current: Element | null = el;
@@ -402,7 +521,6 @@ async function tagPathFallback(
     }
 
     return cssSelectors.map((selector) => {
-      if (selector.includes(">>>")) return selector;
       try {
         const el = selector
           ? document.querySelector(selector)
