@@ -64,6 +64,24 @@ await expect(page).toBeAccessible({
 });
 ```
 
+### Snapshot baselines
+
+When you have existing violations that can't be fixed immediately, snapshot baselines let you track them without blocking your test suite. The first run captures a baseline; subsequent runs only fail if **new** violations appear:
+
+```ts
+await expect(page).toBeAccessible({ snapshot: "dashboard" });
+```
+
+Snapshots are stored in `accessibility-snapshots/` and should be committed to version control. Violations are identified by stable Playwright selectors (like `getByRole('img')`) so snapshots survive class-name and ID churn.
+
+When violations are fixed, the baseline ratchets down automatically. To force-update all snapshots to the current state:
+
+```sh
+npx playwright test -u
+# or
+ACCESSLINT_UPDATE=1 npx playwright test
+```
+
 ### Standalone function
 
 For more control, use `accesslintAudit` directly to get the full audit result:
