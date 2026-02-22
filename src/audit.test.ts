@@ -134,8 +134,8 @@ test.describe("accesslintAudit", () => {
     expect(result.violations.length).toBeGreaterThan(0);
     const ruleIds = result.violations.map((v) => v.ruleId);
     // accesslint-011 = img missing alt, accesslint-080 = html missing lang
-    expect(ruleIds).toContain("accesslint-011");
-    expect(ruleIds).toContain("accesslint-080");
+    expect(ruleIds).toContain("text-alternatives/img-alt");
+    expect(ruleIds).toContain("readable/html-has-lang");
   });
 
   test("violations do not contain element property", async ({ page }) => {
@@ -157,18 +157,18 @@ test.describe("accesslintAudit", () => {
     const result = await accesslintAudit(page.locator("#bad"));
     expect(result.violations.length).toBeGreaterThan(0);
     const ruleIds = result.violations.map((v) => v.ruleId);
-    expect(ruleIds).toContain("accesslint-011");
+    expect(ruleIds).toContain("text-alternatives/img-alt");
   });
 
   test("disabledRules filters out specified rules", async ({ page }) => {
     await page.setContent(INACCESSIBLE_HTML);
     const result = await accesslintAudit(page, {
-      disabledRules: ["accesslint-011"],
+      disabledRules: ["text-alternatives/img-alt"],
     });
     const ruleIds = result.violations.map((v) => v.ruleId);
-    expect(ruleIds).not.toContain("accesslint-011");
+    expect(ruleIds).not.toContain("text-alternatives/img-alt");
     // accesslint-080 (html-has-lang) should still be present
-    expect(ruleIds).toContain("accesslint-080");
+    expect(ruleIds).toContain("readable/html-has-lang");
   });
 
   test("re-injection guard — no duplicate script tags", async ({ page }) => {
@@ -187,7 +187,7 @@ test.describe("iframe auditing", () => {
     await page.setContent(IFRAME_INACCESSIBLE_HTML);
     const result = await accesslintAudit(page);
     const ruleIds = result.violations.map((v) => v.ruleId);
-    expect(ruleIds).toContain("accesslint-011");
+    expect(ruleIds).toContain("text-alternatives/img-alt");
   });
 
   test("violation selectors include >>>iframe> prefix", async ({ page }) => {
@@ -207,7 +207,7 @@ test.describe("iframe auditing", () => {
     );
     expect(violations.length).toBeGreaterThan(0);
     const ruleIds = violations.map((v) => v.ruleId);
-    expect(ruleIds).toContain("accesslint-011");
+    expect(ruleIds).toContain("text-alternatives/img-alt");
   });
 
   test("includeFrames: false skips iframe violations", async ({ page }) => {
@@ -225,7 +225,7 @@ test.describe("shadow DOM auditing", () => {
     await page.setContent(SHADOW_DOM_INACCESSIBLE_HTML);
     const result = await accesslintAudit(page);
     const ruleIds = result.violations.map((v) => v.ruleId);
-    expect(ruleIds).toContain("accesslint-011");
+    expect(ruleIds).toContain("text-alternatives/img-alt");
   });
 
   test("violation selectors include >>> delimiter", async ({ page }) => {
@@ -241,7 +241,7 @@ test.describe("shadow DOM auditing", () => {
     await page.setContent(NESTED_SHADOW_HTML);
     const result = await accesslintAudit(page);
     const ruleIds = result.violations.map((v) => v.ruleId);
-    expect(ruleIds).toContain("accesslint-011");
+    expect(ruleIds).toContain("text-alternatives/img-alt");
   });
 
   test("includeShadowDom: false skips shadow DOM violations", async ({ page }) => {
@@ -281,7 +281,7 @@ test.describe("toBeAccessible matcher", () => {
     await page.setContent(INACCESSIBLE_HTML);
     // Disable all known violations — should pass
     await expect(page).toBeAccessible({
-      disabledRules: ["accesslint-011", "accesslint-080"],
+      disabledRules: ["text-alternatives/img-alt", "readable/html-has-lang"],
     });
   });
 
