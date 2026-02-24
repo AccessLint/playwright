@@ -39,7 +39,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@accesslint/core": "^0.8.2"
+    "@accesslint/core": "^0.8.7"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.0",
