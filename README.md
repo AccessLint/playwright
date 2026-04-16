@@ -1,3 +1,5 @@
+> **This package is maintained in the [AccessLint monorepo](https://github.com/AccessLint/accesslint).**
+
 # @accesslint/playwright
 
 Accessibility assertions for Playwright. Adds a `toBeAccessible()` matcher powered by [AccessLint](https://www.accesslint.com?ref=readme_playwright) that checks for WCAG 2.1 Level A and AA violations.
